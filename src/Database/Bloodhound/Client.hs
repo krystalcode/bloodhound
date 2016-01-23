@@ -581,6 +581,11 @@ mash :: Builder -> V.Vector L.ByteString -> Builder
 mash = V.foldl' (\b x -> b `mappend` (byteString "\n") `mappend` (lazyByteString x))
 
 mkBulkStreamValue :: Text -> Text -> Text -> Text -> Value
+mkBulkStreamValue operation indexName mappingName "" =
+  object [operation .=
+          object [ "_index" .= indexName
+                 , "_type"  .= mappingName]]
+
 mkBulkStreamValue operation indexName mappingName docId =
   object [operation .=
           object [ "_index" .= indexName
