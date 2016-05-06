@@ -75,6 +75,10 @@ module Database.Bloodhound.Types
        , IndexTemplate(..)
        , Server(..)
        , Reply
+       , BulkEsResult(..)
+       , BulkEsResultItem(..)
+       , BulkEsResultItemInner(..)
+       , EsResultShards(..)
        , EsResult(..)
        , EsResultFound(..)
        , EsError(..)
@@ -554,6 +558,37 @@ data EsResult a = EsResult { _index      :: Text
 -}
 data EsResultFound a = EsResultFound {  _version :: DocVersion
                                      , _source   :: a } deriving (Eq, Show, Generic, Typeable)
+
+{-| 'BulkEsResult' describes the JSON response returned for bulk operations -}
+data BulkEsResult = BulkEsResult
+    { berTook   :: Int
+    , berErrors :: Bool
+    , berItems  :: [ BulkEsResultItem ] } deriving (Eq, Show, Generic, Typeable)
+
+{-| 'BulkEsResultItem' describes the JSON wrapper of an individual item in bulk
+    operations responses -}
+{- @Issue( "Support all types of bulk operations"
+           type="bug"
+           priority="normal" ) -}
+data BulkEsResultItem = BulkEsResultItemCreate { bericCreate :: BulkEsResultItemInner }
+                      | BulkEsResultItemIndex  { beriiIndex  :: BulkEsResultItemInner }
+                      deriving (Eq, Show, Generic, Typeable)
+
+{-| 'BulkEsResultItemInner' describes an individual item in bulk operations
+    responses -}
+data BulkEsResultItemInner = BulkEsResultItemInner
+    { berIndex  :: Text
+    , berType   :: Text
+    , berId     :: Text
+    , berShards :: EsResultShards
+    , berStatus :: Int } deriving (Eq, Show, Generic, Typeable)
+
+{-| 'EsResultShards' describes the part of a JSON response that provides
+    information around the shards involved in the operation(s) -}
+data EsResultShards = EsResultShards
+    { total      :: Int
+    , successful :: Int
+    , failed     :: Int } deriving (Eq, Show, Generic, Typeable)
 
 {-| 'EsError' is the generic type that will be returned when there was a
     problem. If you can't parse the expected response, its a good idea to
@@ -3049,6 +3084,34 @@ instance (FromJSON a) => FromJSON (EsResultFound a) where
   parseJSON (Object v) = EsResultFound <$>
                          v .: "_version" <*>
                          v .: "_source"
+  parseJSON _          = empty
+
+instance FromJSON BulkEsResult where
+  parseJSON (Object v) = BulkEsResult
+                         <$> v .: "took"
+                         <*> v .: "errors"
+                         <*> v .: "items"
+  parseJSON _          = empty
+
+instance FromJSON BulkEsResultItem where
+  parseJSON (Object v) = BulkEsResultItemCreate <$> v .: "create"
+                     <|> BulkEsResultItemIndex  <$> v .: "index"
+  parseJSON _          = empty
+
+instance FromJSON BulkEsResultItemInner where
+  parseJSON (Object v) = BulkEsResultItemInner
+                         <$> v .: "_index"
+                         <*> v .: "_type"
+                         <*> v .: "_id"
+                         <*> v .: "_shards"
+                         <*> v .: "status"
+  parseJSON _          = empty
+
+instance FromJSON EsResultShards where
+  parseJSON (Object v) = EsResultShards
+                         <$> v .: "total"
+                         <*> v .: "successful"
+                         <*> v .: "failed"
   parseJSON _          = empty
 
 instance FromJSON EsError where
