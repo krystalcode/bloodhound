@@ -40,6 +40,7 @@ module Database.Bloodhound.Client
        , indexDocumentAutoID
        , updateDocument
        , getDocument
+       , mgetDocuments
        , documentExists
        , deleteDocument
        , searchAll
@@ -240,6 +241,10 @@ put    :: MonadBH m => Text -> Maybe L.ByteString -> m Reply
 put    = dispatch NHTM.methodPut
 post   :: MonadBH m => Text -> Maybe L.ByteString -> m Reply
 post   = dispatch NHTM.methodPost
+
+-- Certain GET requests require a body.
+getWithBody :: MonadBH m => Text -> Maybe L.ByteString -> m Reply
+getWithBody = dispatch NHTM.methodGet
 
 -- indexDocument s ix name doc = put (root </> s </> ix </> name </> doc) (Just encode doc)
 -- http://hackage.haskell.org/package/http-client-lens-0.1.0/docs/Network-HTTP-Client-Lens.html
@@ -634,6 +639,27 @@ getDocument :: MonadBH m => IndexName -> MappingName
 getDocument (IndexName indexName)
   (MappingName mappingName) (DocId docId) =
   get =<< joinPath [indexName, mappingName, docId]
+
+-- | 'mgetDocuments' provides a way to get multiple documents by their ID using
+--   the Multi GET API
+--
+-- >>> yourDocs <- runGH' $ mgetDocuments testIndex testMapping [(Nothing, Nothing, DocId "1"),(Nothing, Nothing, DocId "2")]
+-- >>> yourDocs <- runGH' $ mgetDocuments testIndex Nothing [(Nothing, testMapping1, DocId "1"),(Nothing, testMapping2, DocId "2")]
+-- >>> yourDocs <- runGH' $ mgetDocuments Nothing Nothing [(testIndex1, testMapping1, DocId "1"),(testIndex2, textMapping2, DocId "2")]
+mgetDocuments :: MonadBH m => Maybe IndexName -> Maybe MappingName
+                 -> [(Maybe IndexName, Maybe MappingName, DocId)] -> m Reply
+mgetDocuments maybeIndex maybeMapping docs = bindM2 getWithBody (joinPath [indexName, mappingName, "_mget"]) (return $ Just (encode body))
+  where body  = MgetDocuments $ map (\(index, mapping, docId) -> MgetDocument index mapping docId) docs
+        paths = LS.filter (not . T.null) [indexName, mappingName, "_mget"]
+        {-
+          @Issue(
+            "Is there a better way to convert IndexName or Mapping to Text?"
+            type="improvement"
+            priority="low"
+          )
+        -}
+        indexName   = maybe "" (T.pack . show) maybeIndex
+        mappingName = maybe "" (T.pack . show) maybeMapping
 
 -- | 'documentExists' enables you to check if a document exists. Returns 'Bool'
 --   in IO

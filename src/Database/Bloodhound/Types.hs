@@ -269,6 +269,10 @@ module Database.Bloodhound.Types
 
        , EsUsername(..)
        , EsPassword(..)
+
+       , MgetDocuments(..)
+       , MgetDocument(..)
+       , MgetEsResult(..)
          ) where
 
 import           Control.Applicative
@@ -3605,3 +3609,40 @@ newtype EsUsername = EsUsername { esUsername :: Text } deriving (Show, Eq)
 
 -- | Password type used for HTTP Basic authentication. See 'basicAuthHook'.
 newtype EsPassword = EsPassword { esPassword :: Text } deriving (Show, Eq)
+
+{-
+  @Issue(
+    "Refactor types into separate files"
+    type="task"
+    priority="low"
+    labels="readability, structure"
+  )
+-}
+-- | 'MgetDocuments' describes the JSON request body for getting multiple
+--   documents by their id using the Multi GET API.
+data MgetDocuments = MgetDocuments { mgetRequestDocs :: [MgetDocument] }
+
+-- | 'MgetDocument' describes an individual document that will be requested
+--   when using the Multi GET API.
+data MgetDocument  = MgetDocument  { mgetIndex :: Maybe IndexName
+                                   , mgetType  :: Maybe MappingName
+                                   , mgetId    :: DocId }
+
+{-| 'MgetEsResult' describes the JSON response returned for Multi GET API requests -}
+data MgetEsResult a = MgetEsResult
+    { mgetDocs :: [EsResult a] } deriving (Eq, Show, Generic, Typeable)
+
+instance ToJSON MgetDocuments where
+  toJSON MgetDocuments {..} =
+    object [ "docs" .= mgetRequestDocs ]
+
+instance ToJSON MgetDocument where
+  toJSON MgetDocument {..} =
+    object [ "_index" .= mgetIndex
+           , "_type"  .= mgetType
+           , "_id"    .= mgetId ]
+
+instance (FromJSON a) => FromJSON (MgetEsResult a) where
+  parseJSON (Object v) = 
+    MgetEsResult <$> v .: "docs"
+  parseJSON _          = empty
