@@ -820,7 +820,7 @@ newtype MappingName = MappingName Text deriving (Eq, Generic, Show, ToJSON, From
     Can be set by the user or created by ES itself. Often used in client
     functions for poking at specific documents.
 -}
-newtype DocId = DocId Text deriving (Eq, Generic, Show, ToJSON, FromJSON, Typeable)
+newtype DocId = DocId Text deriving (Eq, Ord, Read, Generic, Show, ToJSON, FromJSON, Typeable)
 
 {-| 'QueryString' is used to wrap query text bodies, be they human written or not.
 -}
