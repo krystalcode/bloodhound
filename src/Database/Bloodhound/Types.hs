@@ -2096,7 +2096,7 @@ instance ToJSON Query where
                                        , "boost" .= boost]]
 
   toJSON (ConstantScoreQuery query boost) =
-    object ["constant_score" .= object ["query" .= query
+    object ["constant_score" .= object ["filter" .= query
                                        , "boost" .= boost]]
 
   toJSON (QueryDisMaxQuery disMaxQuery) =
@@ -2197,7 +2197,7 @@ instance FromJSON Query where
             Just x -> ConstantScoreFilter <$> parseJSON x
                                           <*> o .: "boost"
             _ -> fail "Does not appear to be a ConstantScoreFilter"
-          constantScoreQuery o = case HM.lookup "query" o of
+          constantScoreQuery o = case HM.lookup "filter" o of
             Just x -> ConstantScoreQuery <$> parseJSON x
                                          <*> o .: "boost"
             _ -> fail "Does not appear to be a ConstantScoreQuery"
