@@ -1,22 +1,12 @@
-install-with-test-support:
-	cabal install --enable-tests
-	echo "Make certain you have an elasticsearch instance on localhost:9200 !"
-	cabal test
+build:
+	stack build
 
 test:
 	echo "Make certain you have an elasticsearch instance on localhost:9200 !"
-	cabal clean
-	cabal test
+	stack test
 
-build:
-	cabal build
+ghci:
+	stack ghci
 
-test-repl:
-	cabal repl tests
-
-repl:
-	cabal repl
-
-reset:
-	rm -rf .cabal-sandbox
-	cabal sandbox init
+upload:
+	stack upload --no-signature .

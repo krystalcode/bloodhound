@@ -1,5 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards   #-}
+{-# LANGUAGE TupleSections     #-}
 
 -------------------------------------------------------------------------------
 -- |
@@ -26,9 +27,11 @@ module Database.Bloodhound.Client
        , deleteIndex
        , updateIndexSettings
        , getIndexSettings
+       , optimizeIndex
        , indexExists
        , openIndex
        , closeIndex
+       , listIndices
        , updateIndexAliases
        , getIndexAliases
        , putTemplate
@@ -83,7 +86,7 @@ import qualified Data.HashMap.Strict          as HM
 import           Data.Ix
 import qualified Data.List                    as LS (filter, foldl')
 import           Data.List.NonEmpty           (NonEmpty (..))
-import           Data.Maybe                   (fromMaybe, isJust)
+import           Data.Maybe                   (catMaybes, fromMaybe, isJust)
 import           Data.Monoid
 import           Data.Text                    (Text)
 import qualified Data.Text                    as T
@@ -162,28 +165,30 @@ mkShardCount n
   | otherwise = Just (ShardCount n)
 
 -- | 'mkReplicaCount' is a straight-forward smart constructor for 'ReplicaCount'
---   which rejects 'Int' values below 1 and above 1000.
+--   which rejects 'Int' values below 0 and above 1000.
 --
 -- >>> mkReplicaCount 10
 -- Just (ReplicaCount 10)
 mkReplicaCount :: Int -> Maybe ReplicaCount
 mkReplicaCount n
-  | n < 1 = Nothing
+  | n < 0 = Nothing
   | n > 1000 = Nothing -- ...
   | otherwise = Just (ReplicaCount n)
 
 emptyBody :: L.ByteString
 emptyBody = L.pack ""
 
-dispatch :: MonadBH m => Method -> Text -> Maybe L.ByteString
-            -> m Reply
+dispatch :: MonadBH m
+         => Method
+         -> Text
+         -> Maybe L.ByteString
+         -> m Reply
 dispatch dMethod url body = do
   initReq <- liftIO $ parseUrl' url
   reqHook <- bhRequestHook <$> getBHEnv
   let reqBody = RequestBodyLBS $ fromMaybe emptyBody body
-  req <- liftIO $ reqHook $ initReq { method = dMethod
-                                    , requestBody = reqBody
-                                    , checkStatus = \_ _ _ -> Nothing}
+  req <- liftIO $ reqHook $ setRequestIgnoreStatus $ initReq { method = dMethod
+                                                             , requestBody = reqBody }
   mgr <- bhManager <$> getBHEnv
   liftIO $ httpLbs req mgr
 
@@ -308,6 +313,48 @@ getIndexSettings (IndexName indexName) = do
   where url = joinPath [indexName, "_settings"]
 
 
+-- | 'optimizeIndex' will optimize a single index, list of indexes or
+-- all indexes. Note that this call will block until finishing but
+-- will continue even if the request times out. Concurrent requests to
+-- optimize an index while another is performing will block until the
+-- previous one finishes. For more information see
+-- <https://www.elastic.co/guide/en/elasticsearch/reference/1.7/indices-optimize.html>. Nothing
+-- worthwhile comes back in the reply body, so matching on the status
+-- should suffice.
+--
+-- 'optimizeIndex' with a maxNumSegments of 1 and onlyExpungeDeletes
+-- to True is the main way to release disk space back to the OS being
+-- held by deleted documents.
+--
+-- Note that this API was deprecated in ElasticSearch 2.1 for the
+-- almost completely identical forcemerge API. Adding support to that
+-- API would be trivial but due to the significant breaking changes,
+-- this library cannot currently be used with >= 2.0, so that feature was omitted.
+--
+-- >>> let ixn = IndexName "unoptimizedindex"
+-- >>> _ <- runBH' $ deleteIndex ixn >> createIndex defaultIndexSettings ixn
+-- >>> response <- runBH' $ optimizeIndex (IndexList (ixn :| [])) (defaultIndexOptimizationSettings { maxNumSegments = Just 1, onlyExpungeDeletes = True })
+-- >>> respIsTwoHunna response
+-- True
+optimizeIndex :: MonadBH m => IndexSelection -> IndexOptimizationSettings -> m Reply
+optimizeIndex ixs IndexOptimizationSettings {..} =
+    bindM2 post url (return body)
+  where url = addQuery params <$> joinPath [indexName, "_optimize"]
+        params = catMaybes [ ("max_num_segments",) . Just . showText <$> maxNumSegments
+                           , Just ("only_expunge_deletes", Just (boolQP onlyExpungeDeletes))
+                           , Just ("flush", Just (boolQP flushAfterOptimize))
+                           ]
+        indexName = indexSelectionName ixs
+        boolQP True = "true"
+        boolQP False = "false"
+        body = Nothing
+
+
+-------------------------------------------------------------------------------
+indexSelectionName :: IndexSelection -> Text
+indexSelectionName (IndexList names) = T.intercalate "," [n | IndexName n <- toList names]
+indexSelectionName AllIndexes        = "_all"
+
 deepMerge :: [Object] -> Object
 deepMerge = LS.foldl' go mempty
   where go acc = LS.foldl' go' acc . HM.toList
@@ -392,6 +439,19 @@ openIndex = openOrCloseIndexes OpenIndex
 closeIndex :: MonadBH m => IndexName -> m Reply
 closeIndex = openOrCloseIndexes CloseIndex
 
+-- | 'listIndices' returns a list of all index names on a given 'Server'
+listIndices :: (MonadThrow m, MonadBH m) => m [IndexName]
+listIndices =
+  parse . responseBody =<< get =<< url
+  where
+    url = joinPath ["_cat/indices?v"]
+    -- parses the tabular format the indices api provides
+    parse body = case T.lines (T.decodeUtf8 (L.toStrict body)) of
+      (hdr:rows) -> let ks = T.words hdr
+                        keyedRows = [ HM.fromList (zip ks (T.words row)) | row <- rows ]
+                        names = catMaybes (HM.lookup "index" <$> keyedRows)
+                    in return (IndexName <$> names)
+      [] -> throwM (EsProtocolException body)
 
 -- | 'updateIndexAliases' updates the server's index alias
 -- table. Operations are atomic. Explained in further detail at
@@ -401,6 +461,7 @@ closeIndex = openOrCloseIndexes CloseIndex
 -- >>> let aliasName = IndexName "an-alias"
 -- >>> let iAlias = IndexAlias src (IndexAliasName aliasName)
 -- >>> let aliasCreate = IndexAliasCreate Nothing Nothing
+-- >>> _ <- runBH' $ deleteIndex src
 -- >>> respIsTwoHunna <$> runBH' (createIndex defaultIndexSettings src)
 -- True
 -- >>> runBH' $ indexExists src
@@ -490,7 +551,7 @@ versionCtlParams cfg =
     ExternalGTE (ExternalDocVersion v) -> versionParams v "external_gte"
     ForceVersion (ExternalDocVersion v) -> versionParams v "force"
   where
-    vt = T.pack . show . docVersionNumber
+    vt = showText . docVersionNumber
     versionParams v t = [ ("version", Just $ vt v)
                         , ("version_type", Just t)
                         ]
@@ -558,7 +619,7 @@ deleteDocument (IndexName indexName)
 -- | 'bulk' uses
 --    <http://www.elasticsearch.org/guide/en/elasticsearch/reference/current/docs-bulk.html Elasticsearch's bulk API>
 --    to perform bulk operations. The 'BulkOperation' data type encodes the
---    index/update/delete/create operations. You pass a 'V.Vector' of 'BulkOperation's
+--    index\/update\/delete\/create operations. You pass a 'V.Vector' of 'BulkOperation's
 --    and a 'Server' to 'bulk' in order to send those operations up to your Elasticsearch
 --    server to be performed. I changed from [BulkOperation] to a Vector due to memory overhead.
 --
@@ -732,9 +793,8 @@ scroll' (Just sid) = do
       Right SearchResult {..} -> return (hits searchHits, scrollId)
       Left _ -> return ([], Nothing)
 
--- | Use the given scroll to fetch the next page of documents. If
--- there are still further pages, there will be a value in the
--- 'scrollId' field of the 'SearchResult'
+-- | Use the given scroll to fetch the next page of documents. If there are no
+-- further pages, 'SearchResult.searchHits.hits' will be '[]'.
 advanceScroll
   :: ( FromJSON a
      , MonadBH m
@@ -822,7 +882,7 @@ pageSearch :: From     -- ^ The result offset
 pageSearch resultOffset pageSize search = search { from = resultOffset, size = pageSize }
 
 parseUrl' :: MonadThrow m => Text -> m Request
-parseUrl' t = parseUrl (URI.escapeURIString URI.isAllowedInURI (T.unpack t))
+parseUrl' t = parseRequest (URI.escapeURIString URI.isAllowedInURI (T.unpack t))
 
 -- | Was there an optimistic concurrency control conflict when
 -- indexing a document?

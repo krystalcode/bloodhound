@@ -66,9 +66,6 @@ deleteExampleIndex = deleteIndex testIndex
 
 data ServerVersion = ServerVersion Int Int Int deriving (Show, Eq, Ord)
 
-es14 :: ServerVersion
-es14 = ServerVersion 1 4 0
-
 es13 :: ServerVersion
 es13 = ServerVersion 1 3 0
 
@@ -77,9 +74,6 @@ es12 = ServerVersion 1 2 0
 
 es11 :: ServerVersion
 es11 = ServerVersion 1 1 0
-
-es10 :: ServerVersion
-es10 = ServerVersion 1 0 0
 
 serverBranch :: ServerVersion -> ServerVersion
 serverBranch (ServerVersion majorVer minorVer patchVer) =
@@ -130,7 +124,8 @@ data Tweet = Tweet { user     :: Text
                    , postDate :: UTCTime
                    , message  :: Text
                    , age      :: Int
-                   , location :: Location }
+                   , location :: Location
+                   , extra    :: Maybe Text }
            deriving (Eq, Generic, Show)
 
 instance ToJSON   Tweet where
@@ -178,7 +173,18 @@ exampleTweet = Tweet { user     = "bitemyapp"
                                   (secondsToDiffTime 10)
                      , message  = "Use haskell!"
                      , age      = 10000
-                     , location = Location 40.12 (-71.34) }
+                     , location = Location 40.12 (-71.34)
+                     , extra = Nothing }
+
+tweetWithExtra :: Tweet
+tweetWithExtra = Tweet { user     = "bitemyapp"
+                       , postDate = UTCTime
+                                    (ModifiedJulianDay 55000)
+                                    (secondsToDiffTime 10)
+                       , message  = "Use haskell!"
+                       , age      = 10000
+                       , location = Location 40.12 (-71.34)
+                       , extra = Just "blah blah" }
 
 newAge :: Int
 newAge = 31337
@@ -202,7 +208,8 @@ otherTweet = Tweet { user     = "notmyapp"
                                 (secondsToDiffTime 11)
                    , message  = "Use haskell!"
                    , age      = 1000
-                   , location = Location 40.12 (-71.34) }
+                   , location = Location 40.12 (-71.34)
+                   , extra = Nothing }
 
 resetIndex :: BH IO ()
 resetIndex = do
@@ -231,6 +238,12 @@ updateData = do
 insertOther :: BH IO ()
 insertOther = do
   _ <- indexDocument testIndex testMapping defaultIndexDocumentSettings otherTweet (DocId "2")
+  _ <- refreshIndex testIndex
+  return ()
+
+insertExtra :: BH IO ()
+insertExtra = do
+  _ <- indexDocument testIndex testMapping defaultIndexDocumentSettings tweetWithExtra (DocId "4")
   _ <- refreshIndex testIndex
   return ()
 
@@ -1141,6 +1154,7 @@ main = hspec $ do
       searchExpectAggs search
       searchValidBucketAgg search "users" toTerms
 
+    -- One of these fails with 1.7.3
     it "can give execution hint parameters to term aggregations" $ when' (atmost es11) $ withTestEnv $ do
       _ <- insertData
       searchTermsAggHint [Map, Ordinals]
@@ -1152,7 +1166,7 @@ main = hspec $ do
     it "can give execution hint parameters to term aggregations" $ when' (atleast es12) $ withTestEnv $ do
       _ <- insertData
       searchTermsAggHint [GlobalOrdinals, GlobalOrdinalsHash, GlobalOrdinalsLowCardinality, Map]
-
+    -- One of the above.
 
     it "can execute value_count aggregations" $ withTestEnv $ do
       _ <- insertData
@@ -1236,6 +1250,16 @@ main = hspec $ do
       forM_ intervals expect
       forM_ intervals valid
 
+    it "can execute missing aggregations" $ withTestEnv $ do
+      _ <- insertData
+      _ <- insertExtra
+      let ags = mkAggregations "missing_agg" (MissingAgg (MissingAggregation "extra"))
+      let search = mkAggregateSearch Nothing ags
+      let docCountPair k n = (k, object ["doc_count" .= Number n])
+      res <- searchTweets search
+      liftIO $
+        fmap aggregations res `shouldBe` Right (Just (M.fromList [docCountPair "missing_agg" 1]))
+
   describe "Highlights API" $ do
 
     it "returns highlight from query when there should be one" $ withTestEnv $ do
@@ -1284,7 +1308,8 @@ main = hspec $ do
 
     it "excludes source patterns" $ withTestEnv $ do
       searchExpectSource
-        (SourceIncludeExclude (Include []) (Exclude [Pattern "l*", Pattern "*ge", Pattern "postDate"]))
+        (SourceIncludeExclude (Include [])
+        (Exclude [Pattern "l*", Pattern "*ge", Pattern "postDate", Pattern "extra"]))
         (Right (Object (HM.fromList [("user",String "bitemyapp")])))
 
   describe "ToJSON RegexpFlags" $ do
@@ -1402,6 +1427,12 @@ main = hspec $ do
               L.find ((== alias) . indexAliasSummaryAlias) summs `shouldBe` Just expected
             Left e -> expectationFailure ("Expected an IndexAliasesSummary but got " <> show e)) `finally` cleanup
 
+  describe "Index Listing" $ do
+    it "returns a list of index names" $ withTestEnv $ do
+      _ <- createExampleIndex
+      ixns <- listIndices
+      liftIO (ixns `shouldContain` [testIndex])
+
   describe "Index Settings" $ do
     it "persists settings" $ withTestEnv $ do
       _ <- deleteExampleIndex
@@ -1415,6 +1446,12 @@ main = hspec $ do
                                     testIndex
                                     (IndexSettings (ShardCount 1) (ReplicaCount 0))
                                     (NE.toList updates))
+
+  describe "Index Optimization" $ do
+    it "returns a successful response upon completion" $ withTestEnv $ do
+      _ <- createExampleIndex
+      resp <- optimizeIndex (IndexList (testIndex :| [])) defaultIndexOptimizationSettings
+      liftIO $ validateStatus resp 200
 
   describe "JSON instances" $ do
     propJSON (Proxy :: Proxy Version)
