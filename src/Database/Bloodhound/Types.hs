@@ -1315,11 +1315,12 @@ data BoolQuery =
             , boolQueryMinimumShouldMatch :: Maybe MinimumMatch
             , boolQueryBoost              :: Maybe Boost
             , boolQueryDisableCoord       :: Maybe DisableCoord
+            , boolQueryFilterContext      :: Maybe [Query]
             } deriving (Eq, Show, Generic, Typeable)
 
 mkBoolQuery :: [Query] -> [Query] -> [Query] -> BoolQuery
 mkBoolQuery must mustNot should =
-  BoolQuery must mustNot should Nothing Nothing Nothing
+  BoolQuery must mustNot should Nothing Nothing Nothing Nothing
 
 data BoostingQuery =
   BoostingQuery { positiveQuery :: Query
@@ -2693,14 +2694,15 @@ instance FromJSON BoostingQuery where
                     <*> o .: "negative_boost"
 
 instance ToJSON BoolQuery where
-  toJSON (BoolQuery mustM notM shouldM bqMin boost disableCoord) =
+  toJSON (BoolQuery mustM notM shouldM bqMin boost disableCoord filterContext) =
     omitNulls base
     where base = [ "must" .= mustM
                  , "must_not" .= notM
                  , "should" .= shouldM
                  , "minimum_should_match" .= bqMin
                  , "boost" .= boost
-                 , "disable_coord" .= disableCoord ]
+                 , "disable_coord" .= disableCoord
+                 , "filter" .= filterContext ]
 
 instance FromJSON BoolQuery where
   parseJSON = withObject "BoolQuery" parse
@@ -2711,6 +2713,7 @@ instance FromJSON BoolQuery where
                     <*> o .:? "minimum_should_match"
                     <*> o .:? "boost"
                     <*> o .:? "disable_coord"
+                    <*> o .:? "filter"
 
 instance ToJSON MatchQuery where
   toJSON (MatchQuery (FieldName fieldName)
