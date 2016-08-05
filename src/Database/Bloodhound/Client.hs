@@ -731,16 +731,9 @@ getDocument (IndexName indexName)
 mgetDocuments :: MonadBH m => Maybe IndexName -> Maybe MappingName
                  -> [(Maybe IndexName, Maybe MappingName, DocId)] -> m Reply
 mgetDocuments maybeIndex maybeMapping docs = bindM2 getWithBody (joinPath [indexName, mappingName, "_mget"]) (return $ Just (encode body))
-  where body  = MgetDocuments $ map (\(index, mapping, docId) -> MgetDocument index mapping docId) docs
-        {-
-          @Issue(
-            "Is there a better way to convert IndexName or Mapping to Text?"
-            type="improvement"
-            priority="low"
-          )
-        -}
-        indexName   = maybe "" (T.pack . show) maybeIndex
-        mappingName = maybe "" (T.pack . show) maybeMapping
+  where body        = MgetDocuments $ map (\(index, mapping, docId) -> MgetDocument index mapping docId) docs
+        indexName   = maybe "" (coerce :: IndexName -> T.Text) maybeIndex
+        mappingName = maybe "" (coerce :: MappingName -> T.Text) maybeMapping
 
 -- | 'documentExists' enables you to check if a document exists. Returns 'Bool'
 --   in IO
