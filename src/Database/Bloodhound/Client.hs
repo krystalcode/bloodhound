@@ -46,6 +46,7 @@ module Database.Bloodhound.Client
        , mgetDocuments
        , documentExists
        , deleteDocument
+       , deleteByQuery
        , searchAll
        , searchByIndex
        , searchByType
@@ -81,6 +82,7 @@ import           Control.Monad.IO.Class
 import           Data.Aeson
 import           Data.ByteString.Lazy.Builder
 import qualified Data.ByteString.Lazy.Char8   as L
+import           Data.Coerce                  (coerce)
 import           Data.Foldable                (toList)
 import qualified Data.HashMap.Strict          as HM
 import           Data.Ix
@@ -616,6 +618,25 @@ deleteDocument (IndexName indexName)
   (MappingName mappingName) (DocId docId) =
   delete =<< joinPath [indexName, mappingName, docId]
 
+{-
+  @Issue(
+    "Add types for parsing a Delete By Query API response"
+    type="bug"
+    priority="normal"
+    labels="response"
+  )
+-}
+
+-- | 'deleteByQuery' uses
+--    <https://www.elastic.co/guide/en/elasticsearch/plugins/current/plugins-delete-by-query.html Delete By Query Plugin>
+--    to delete all documens that match the given query. The 'delete-by-query' plugin needs to be
+--    installed.
+deleteByQuery :: MonadBH m => Maybe [IndexName] -> Maybe [MappingName] -> Search -> m Reply
+deleteByQuery maybeIndices maybeMappings = bindM2 dispatchSearch url . return
+  where indexName   = maybe "" (T.intercalate "," . (coerce :: [IndexName] -> [T.Text])) maybeIndices
+        mappingName = maybe "" (T.intercalate "," . (coerce :: [MappingName] -> [T.Text])) maybeMappings
+        url         = joinPath [indexName, mappingName, "_delete_by_query"]
+
 -- | 'bulk' uses
 --    <http://www.elasticsearch.org/guide/en/elasticsearch/reference/current/docs-bulk.html Elasticsearch's bulk API>
 --    to perform bulk operations. The 'BulkOperation' data type encodes the
@@ -841,9 +862,9 @@ scanSearch indexName mappingName search = do
 --
 -- >>> let query = TermQuery (Term "user" "bitemyapp") Nothing
 -- >>> mkSearch (Just query) Nothing
--- Search {queryBody = Just (TermQuery (Term {termField = "user", termValue = "bitemyapp"}) Nothing), filterBody = Nothing, sortBody = Nothing, aggBody = Nothing, highlight = Nothing, trackSortScores = False, from = From 0, size = Size 10, searchType = SearchTypeQueryThenFetch, fields = Nothing, source = Nothing}
+-- Search {queryBody = Just (TermQuery (Term {termField = "user", termValue = "bitemyapp"}) Nothing), filterBody = Nothing, sortBody = Nothing, aggBody = Nothing, highlight = Nothinug, trackSortScores = False, from = From 0, size = Size 10, searchType = SearchTypeQueryThenFetch, fields = Nothing, source = Nothing}
 mkSearch :: Maybe Query -> Maybe Filter -> Search
-mkSearch query filter = Search query filter Nothing Nothing Nothing False (From 0) (Size 10) SearchTypeQueryThenFetch Nothing Nothing
+mkSearch query filter = Search query filter Nothing Nothing Nothing False Nothing Nothing SearchTypeQueryThenFetch Nothing Nothing
 
 -- | 'mkAggregateSearch' is a helper function that defaults everything in a 'Search' except for
 --   the 'Query' and the 'Aggregation'.
@@ -853,7 +874,7 @@ mkSearch query filter = Search query filter Nothing Nothing Nothing False (From 
 -- TermsAgg (TermsAggregation {term = Left "user", termInclude = Nothing, termExclude = Nothing, termOrder = Nothing, termMinDocCount = Nothing, termSize = Nothing, termShardSize = Nothing, termCollectMode = Just BreadthFirst, termExecutionHint = Nothing, termAggs = Nothing})
 -- >>> let myAggregation = mkAggregateSearch Nothing $ mkAggregations "users" terms
 mkAggregateSearch :: Maybe Query -> Aggregations -> Search
-mkAggregateSearch query mkSearchAggs = Search query Nothing Nothing (Just mkSearchAggs) Nothing False (From 0) (Size 0) SearchTypeQueryThenFetch Nothing Nothing
+mkAggregateSearch query mkSearchAggs = Search query Nothing Nothing (Just mkSearchAggs) Nothing False Nothing Nothing SearchTypeQueryThenFetch Nothing Nothing
 
 -- | 'mkHighlightSearch' is a helper function that defaults everything in a 'Search' except for
 --   the 'Query' and the 'Aggregation'.
@@ -862,7 +883,7 @@ mkAggregateSearch query mkSearchAggs = Search query Nothing Nothing (Just mkSear
 -- >>> let testHighlight = Highlights Nothing [FieldHighlight (FieldName "message") Nothing]
 -- >>> let search = mkHighlightSearch (Just query) testHighlight
 mkHighlightSearch :: Maybe Query -> Highlights -> Search
-mkHighlightSearch query searchHighlights = Search query Nothing Nothing Nothing (Just searchHighlights) False (From 0) (Size 10) SearchTypeQueryThenFetch Nothing Nothing
+mkHighlightSearch query searchHighlights = Search query Nothing Nothing Nothing (Just searchHighlights) False Nothing Nothing SearchTypeQueryThenFetch Nothing Nothing
 
 -- | 'pageSearch' is a helper function that takes a search and assigns the from
 --    and size fields for the search. The from parameter defines the offset
@@ -879,7 +900,7 @@ pageSearch :: From     -- ^ The result offset
            -> Size     -- ^ The number of results to return
            -> Search  -- ^ The current seach
            -> Search  -- ^ The paged search
-pageSearch resultOffset pageSize search = search { from = resultOffset, size = pageSize }
+pageSearch resultOffset pageSize search = search { from = Just resultOffset, size = Just pageSize }
 
 parseUrl' :: MonadThrow m => Text -> m Request
 parseUrl' t = parseRequest (URI.escapeURIString URI.isAllowedInURI (T.unpack t))

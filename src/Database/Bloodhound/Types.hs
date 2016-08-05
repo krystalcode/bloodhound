@@ -994,8 +994,8 @@ data Search = Search { queryBody       :: Maybe Query
                      , highlight       :: Maybe Highlights
                        -- default False
                      , trackSortScores :: TrackSortScores
-                     , from            :: From
-                     , size            :: Size
+                     , from            :: Maybe From
+                     , size            :: Maybe Size
                      , searchType      :: SearchType
                      , fields          :: Maybe [FieldName]
                      , source          :: Maybe Source } deriving (Eq, Read, Show, Generic, Typeable)
