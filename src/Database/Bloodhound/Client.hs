@@ -732,7 +732,6 @@ mgetDocuments :: MonadBH m => Maybe IndexName -> Maybe MappingName
                  -> [(Maybe IndexName, Maybe MappingName, DocId)] -> m Reply
 mgetDocuments maybeIndex maybeMapping docs = bindM2 getWithBody (joinPath [indexName, mappingName, "_mget"]) (return $ Just (encode body))
   where body  = MgetDocuments $ map (\(index, mapping, docId) -> MgetDocument index mapping docId) docs
-        paths = LS.filter (not . T.null) [indexName, mappingName, "_mget"]
         {-
           @Issue(
             "Is there a better way to convert IndexName or Mapping to Text?"
